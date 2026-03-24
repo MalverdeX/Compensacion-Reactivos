@@ -416,21 +416,39 @@ class ComponentDatabase:
         
         units = costs[category]["units"]
         
+        # Validar que haya unidades disponibles
+        if not units:
+            return 1000.0  # Costo por defecto
+        
         # Encontrar la unidad más cercana
         closest_unit = min(units, key=lambda x: abs(x["kvar"] - q_compensacion))
         
-        # Interpolar costo si es necesario
-        if closest_unit["kvar"] == q_compensacion:
-            return closest_unit["cost_usd"]
+        # Si el valor es muy pequeño o muy grande, usar el extremo más cercano
+        if q_compensacion <= units[0]["kvar"]:
+            return units[0]["cost_usd"] * 1.25
         
-        # Interpolación lineal simple
-        lower_unit = max([u for u in units if u["kvar"] <= q_compensacion], key=lambda x: x["kvar"])
-        upper_unit = min([u for u in units if u["kvar"] >= q_compensacion], key=lambda x: x["kvar"])
+        if q_compensacion >= units[-1]["kvar"]:
+            return units[-1]["cost_usd"] * 1.25
         
+        # Encontrar unidades inferior y superior para interpolación
+        lower_units = [u for u in units if u["kvar"] <= q_compensacion]
+        upper_units = [u for u in units if u["kvar"] >= q_compensacion]
+        
+        if not lower_units:
+            lower_unit = units[0]
+        else:
+            lower_unit = max(lower_units, key=lambda x: x["kvar"])
+        
+        if not upper_units:
+            upper_unit = units[-1]
+        else:
+            upper_unit = min(upper_units, key=lambda x: x["kvar"])
+        
+        # Si son la misma unidad, retornar su costo
         if lower_unit == upper_unit:
-            return lower_unit["cost_usd"]
+            return lower_unit["cost_usd"] * 1.25
         
-        # Interpolación
+        # Interpolación lineal
         ratio = (q_compensacion - lower_unit["kvar"]) / (upper_unit["kvar"] - lower_unit["kvar"])
         interpolated_cost = lower_unit["cost_usd"] + ratio * (upper_unit["cost_usd"] - lower_unit["cost_usd"])
         
