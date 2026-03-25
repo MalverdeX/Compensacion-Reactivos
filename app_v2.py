@@ -3,6 +3,9 @@ Versión 2.0 - Calculadora de Compensación de Reactivos con arquitectura modula
 """
 import streamlit as st
 import math
+import pandas as pd
+import base64
+from datetime import datetime
 from components import PowerCalculator, SolutionComparator, TemplateManager, ComponentDatabase, ChartGenerator, PDFExporter
 
 # Configuración de página
@@ -17,13 +20,17 @@ st.set_page_config(
 st.title("⚡ Calculadora de Compensación de Reactivos v2.0")
 st.markdown("---")
 
-# Inicializar session state
+# Inicializar session state al inicio de la app
+if 'calculation_history' not in st.session_state:
+    st.session_state.calculation_history = []
 if 'current_calculation' not in st.session_state:
     st.session_state.current_calculation = None
 if 'comparison_results' not in st.session_state:
     st.session_state.comparison_results = None
 if 'selected_template' not in st.session_state:
     st.session_state.selected_template = None
+if 'comparison_list' not in st.session_state:
+    st.session_state.comparison_list = []
 
 # Sidebar mejorado
 st.sidebar.title("🚀 Panel de Control")
@@ -60,9 +67,13 @@ if hasattr(st.session_state, 'page') and st.session_state.page != seccion:
 # Información del sistema
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📈 Estado del Sistema")
+
 if st.session_state.current_calculation:
+    calc = st.session_state.current_calculation
     st.sidebar.success("✅ Cálculo realizado")
-    st.sidebar.info(f"Tipo: {st.session_state.current_calculation.get('method', 'Desconocido')}")
+    st.sidebar.info(f"Tipo: {calc.get('method', 'Desconocido')}")
+    st.sidebar.info(f"Nombre: {calc.get('name', 'Sin nombre')}")
+    st.sidebar.info(f"Componente: {calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}")
 else:
     st.sidebar.warning("⚠️ Sin cálculos realizados")
 
@@ -204,11 +215,11 @@ if seccion == "🏠 Dashboard":
         if method == 'serie':
             # Gráfico específico para compensación serie
             fig_series = ChartGenerator.create_series_impedance_chart(calc)
-            st.plotly_chart(fig_series, use_container_width=True)
+            st.plotly_chart(fig_series, use_container_width=True, key="dashboard_series_chart")
         else:
             # Gráfico para compensación paralelo
             fig = ChartGenerator.create_comparison_chart(calc, method)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="dashboard_parallel_chart")
 
 elif seccion == "📋 Plantillas":
     st.header("📋 Plantillas Preconfiguradas")
@@ -237,20 +248,45 @@ elif seccion == "📋 Plantillas":
     if filtered_templates:
         st.info(f"📋 Se encontraron {len(filtered_templates)} plantillas")
         
-        # Grid de plantillas
+        # Grid de plantillas con mejor contraste y animación
         cols = st.columns(3)
         for i, template in enumerate(filtered_templates):
             with cols[i % 3]:
-                st.markdown(f"""
-                <div style="border: 2px solid #667eea; border-radius: 10px; padding: 20px; margin: 10px 0; background: white;">
-                    <h3>{template['icon']} {template['name']}</h3>
-                    <p style="color: #666; margin: 10px 0;">{template['description']}</p>
-                    <p style="font-size: 0.9em; color: #888;">
-                        <strong>Categoría:</strong> {template['category_name']}<br>
-                        <strong>Tipo:</strong> {template['params'].get('tipo_comp', 'N/A')}
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
+                # ID único para cada tarjeta
+                template_id = f"template_{template['template_id']}"
+                
+                # Contenedor principal con mejor contraste - usando componentes nativos de Streamlit
+                with st.container():
+                    st.markdown(f"""
+                    <div style="border: 3px solid #2c3e50; border-radius: 15px; padding: 25px; margin: 15px 0; background: linear-gradient(145deg, #ffffff, #f8f9fa); box-shadow: 0 8px 16px rgba(0,0,0,0.15);">
+                        <h3 style="color: #1a1a1a; margin-bottom: 15px; font-size: 1.3em; font-weight: bold;">
+                            {template['icon']} {template['name']}
+                        </h3>
+                        <p style="color: #2c3e50; margin: 15px 0; line-height: 1.5; font-size: 0.95em;">
+                            {template['description']}
+                        </p>
+                        <p style="font-size: 0.85em; color: #34495e; margin: 0;">
+                            <strong style="color: #2c3e50;">Categoría:</strong> {template['category_name']}<br>
+                            <strong style="color: #2c3e50;">Tipo:</strong> {template['params'].get('tipo_comp', 'N/A')}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Detalles técnicos en expander
+                    with st.expander(f"📋 Detalles Técnicos - {template['name']}"):
+                        # Título más pequeño y subtítulo informativo
+                        st.markdown(f"<h4 style='font-size: 0.85em; color: #666; margin-bottom: 10px;'>Parámetros Técnicos de {template['name']}</h4>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='font-size: 0.75em; color: #888; margin-bottom: 15px;'>Configuración recomendada para este escenario</p>", unsafe_allow_html=True)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Potencia", f"{template['params'].get('potencia_activa', 'N/A')} kW")
+                            st.metric("FP Actual", f"{template['params'].get('fp_actual', 'N/A')}")
+                            st.metric("Tensión", f"{template['params'].get('tension', 'N/A')} V")
+                        with col2:
+                            st.metric("FP Deseado", f"{template['params'].get('fp_deseado', 'N/A')}")
+                            st.metric("Frecuencia", f"{template['params'].get('frecuencia', 'N/A')} Hz")
+                            st.metric("Tipo", f"{template['params'].get('tipo_comp', 'N/A')}")
                 
                 if st.button(f"📋 Usar Plantilla", key=f"template_{template['template_id']}", use_container_width=True):
                     st.session_state.selected_template = template
@@ -302,12 +338,12 @@ elif seccion == "⚡ Compensación Paralelo":
         template = st.session_state.selected_template
         st.markdown("---")
         st.markdown(f"""
-        <div style="background: #e8f5e8; border-left: 5px solid #28a745; padding: 20px; margin: 20px 0; border-radius: 5px;">
-            <h3>📋 Plantilla Seleccionada Activa</h3>
-            <p><strong>{template['icon']} {template['name']}</strong></p>
-            <p>{template['description']}</p>
-            <div style="margin-top: 15px;">
-                <small>
+        <div style="background: #d4edda; border-left: 5px solid #155724; padding: 20px; margin: 20px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <h3 style="color: #155724; margin-bottom: 15px; font-size: 1.2em;">📋 Plantilla Seleccionada Activa</h3>
+            <p style="color: #155724; font-weight: bold; margin: 8px 0; font-size: 1.1em;">{template['icon']} {template['name']}</p>
+            <p style="color: #155724; margin: 8px 0; line-height: 1.4;">{template['description']}</p>
+            <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #c3e6cb;">
+                <small style="color: #155724;">
                     <strong>Categoría:</strong> {template['category_name']} | 
                     <strong>Tipo:</strong> {template['params'].get('tipo_comp', 'N/A')}
                 </small>
@@ -418,36 +454,73 @@ elif seccion == "⚡ Compensación Paralelo":
         # Realizar cálculos
         if st.button("🔢 Calcular Compensación", type="primary"):
             resultados = PowerCalculator.calculate_parallel_compensation(
-                potencia_activa, fp_actual, fp_deseado, tension, frecuencia, tipo_compensacion
+                potencia_activa, fp_actual, fp_deseado, tension, frecuencia, tipo_compensacion,
+                resistencia_conductor=0.1,  # Ω/km valor estándar
+                longitud_conductor=1.0  # km valor estándar
             )
             
             if resultados:
                 # Agregar método para identificación
                 resultados['method'] = 'paralelo'
                 
-                # Guardar en session state
-                st.session_state.current_calculation = resultados
+                # Mostrar alerta de éxito
+                st.success("✅ ¡Cálculo realizado con éxito!")
+                st.balloons()
                 
-                # Calcular costo estimado
-                costo_estimado = ComponentDatabase.estimate_component_cost(resultados['q_compensacion'], tension)
-                resultados['costo_estimado'] = costo_estimado
+                # Pedir nombre para guardar el cálculo
+                st.markdown("---")
+                st.markdown("### 💾 Guardar Cálculo")
+                st.info("📝 Asigna un nombre descriptivo para identificar este cálculo:")
                 
-                # Análisis económico
-                analisis_economico = PowerCalculator.calculate_economic_analysis(
-                    resultados['perdidas_actuales'],
-                    resultados['perdidas_compensadas'],
-                    costo_estimado
+                solution_name = st.text_input(
+                    "Nombre del cálculo:",
+                    value=f"Paralelo {tipo_compensacion} {potencia_activa:.0f}kW {fp_actual:.2f}→{fp_deseado:.2f}FP {tension}V {frecuencia}Hz",
+                    help="Este nombre se usará para identificar el cálculo en el comparador",
+                    key="parallel_solution_name"
                 )
-                resultados.update(analisis_economico)
                 
-                st.success("✅ Cálculo realizado con éxito")
+                # Guardado automático al cambiar el nombre
+                if solution_name.strip():
+                    # Calcular costo estimado
+                    costo_estimado = ComponentDatabase.estimate_component_cost(resultados['q_compensacion'], tension)
+                    resultados['costo_estimado'] = costo_estimado
+                    
+                    # Análisis económico mejorado
+                    analisis_economico = PowerCalculator.calculate_economic_analysis(
+                        resultados['perdidas_actuales'],
+                        resultados['perdidas_compensadas'],
+                        costo_estimado,
+                        horas_operacion_anual=8760,
+                        costo_kwh=None,  # Usará valor por defecto industrial
+                        corriente_actual=resultados['i_actual'],
+                        corriente_compensada=resultados['i_compensada'],
+                        resistencia_conductor=0.1,  # Ω/km valor estándar
+                        longitud_conductor=1.0  # km valor estándar
+                    )
+                    resultados.update(analisis_economico)
+                    
+                    # Guardar con nombre personalizado
+                    resultados['name'] = solution_name.strip()
+                    resultados['added_time'] = datetime.now().strftime("%H:%M:%S")
+                    
+                    # Guardar en session state como cálculo actual y en historial
+                    st.session_state.current_calculation = resultados.copy()
+                    st.session_state.calculation_history.append(resultados.copy())
+                    
+                    st.success(f"🎉 Cálculo '{solution_name}' guardado automáticamente!")
+                    st.info("📊 Ya disponible en el comparador y reportes")
+                    st.rerun()
                 
-                # Métricas principales
+                # Mostrar vista previa de resultados
+                st.markdown("---")
+                st.markdown("### 📊 Vista Previa de Resultados")
+                
+                # Métricas principales con mejor espaciado
                 col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
                 
                 with col_metrics1:
                     st.metric(
-                        "Potencia Reactiva de Compensación",
+                        "Potencia Reactiva",
                         f"{resultados['q_compensacion']:.2f} kVAR",
                         delta=f"{resultados['q_actual'] - resultados['q_deseado']:.2f} kVAR"
                     )
@@ -467,44 +540,173 @@ elif seccion == "⚡ Compensación Paralelo":
                     )
                 
                 # Gráfico de comparación
+                st.markdown("#### 📈 Gráfico Comparativo")
                 fig = ChartGenerator.create_comparison_chart(resultados, "paralelo")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="parallel_preview_chart")
                 
-                # Información económica
-                st.markdown("### 💰 Análisis Económico")
-                
-                col_econ1, col_econ2 = st.columns(2)
-                
-                with col_econ1:
-                    st.metric(
-                        "Costo Estimado",
-                        f"${costo_estimado:,.2f}",
-                        "Componente + instalación"
-                    )
-                
-                with col_econ2:
-                    st.metric(
-                        "Período de Recuperación",
-                        f"{resultados['periodo_recuperacion']:.1f} años",
-                        "ROI"
-                    )
+                # Información adicional
+                with st.expander("📋 Ver más detalles"):
+                    col_detail1, col_detail2 = st.columns(2)
+                    
+                    with col_detail1:
+                        st.write("**Datos Actuales:**")
+                        st.write(f"• Potencia Activa: {potencia_activa:.2f} kW")
+                        st.write(f"• Factor de Potencia: {fp_actual:.3f}")
+                        st.write(f"• Corriente: {resultados['i_actual']:.2f} A")
+                    
+                    with col_detail2:
+                        st.write("**Datos Compensados:**")
+                        st.write(f"• Factor de Potencia: {fp_deseado:.3f}")
+                        st.write(f"• Corriente: {resultados['i_compensada']:.2f} A")
+                        st.write(f"• Reducción: {reduccion_corriente:.1f}%")
         else:
             st.info("Ingrese los parámetros y presione 'Calcular Compensación' para ver los resultados")
+    
+    # Mostrar resultados si hay cálculo guardado
+    if st.session_state.current_calculation:
+        calc = st.session_state.current_calculation
+        method = calc.get('method', 'paralelo')
+        
+        st.markdown("### 📊 Resultados Guardados")
+        st.info(f"📋 Cálculo actual: **{calc.get('name', 'Sin nombre')}**")
+        
+        # Mostrar resultados completos según el método
+        if method == 'serie':
+            col_results1, col_results2, col_results3 = st.columns(3)
+            
+            with col_results1:
+                st.metric(
+                    "Reactancia de Compensación",
+                    f"{calc.get('x_compensacion', 0):.3f} Ω",
+                    "Valor requerido"
+                )
+            
+            with col_results2:
+                st.metric(
+                    "Componente",
+                    f"{calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}",
+                    "Tipo de componente"
+                )
+            
+            with col_results3:
+                cambio_corriente = ((calc.get('i_compensada', 0) - calc.get('i_actual', 0)) / calc.get('i_actual', 1)) * 100
+                st.metric(
+                    "Cambio de Corriente",
+                    f"{cambio_corriente:+.1f}%",
+                    "Variación obtenida"
+                )
+            
+            # Información técnica detallada
+            st.markdown("#### ⚡ Análisis Técnico")
+            col_tech1, col_tech2 = st.columns(2)
+            
+            with col_tech1:
+                st.metric(
+                    "Reactancia Original",
+                    f"{abs(calc.get('reactancia_carga', 0)):.3f} Ω",
+                    "Valor inicial"
+                )
+            
+            with col_tech2:
+                st.metric(
+                    "Reactancia Final",
+                    f"{abs(calc.get('x_total', 0)):.3f} Ω",
+                    "Después de compensación"
+                )
+            
+            # Información económica
+            st.markdown("#### 💰 Información Económica")
+            col_econ1, col_econ2 = st.columns(2)
+            
+            with col_econ1:
+                st.metric(
+                    "Costo Estimado",
+                    f"${calc.get('costo_estimado', 0):,.2f}",
+                    "Componente + instalación"
+                )
+            
+            with col_econ2:
+                st.metric(
+                    "Potencia Aparente",
+                    f"{calc.get('potencia_aparente', 0):.2f} kVA",
+                    "Sistema trifásico"
+                )
+        else:
+            # Resultados para compensación paralelo
+            col_results1, col_results2, col_results3 = st.columns(3)
+            
+            with col_results1:
+                st.metric(
+                    "Potencia Reactiva",
+                    f"{calc.get('q_compensacion', 0):.2f} kVAR",
+                    "Compensación necesaria"
+                )
+            
+            with col_results2:
+                st.metric(
+                    "Componente",
+                    f"{calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}",
+                    "Valor requerido"
+                )
+            
+            with col_results3:
+                if calc.get('method') == 'paralelo':
+                    reduccion = ((calc.get('i_actual', 0) - calc.get('i_compensada', 0)) / calc.get('i_actual', 1)) * 100
+                    st.metric(
+                        "Reducción de Corriente",
+                        f"{reduccion:.1f}%",
+                        "Mejora obtenida"
+                    )
+                else:
+                    st.metric(
+                        "Reducción Reactancia",
+                        f"{calc.get('reduccion_porcentaje', 0):.0f}%",
+                        "Objetivo alcanzado"
+                    )
+            
+            # Información económica
+            st.markdown("#### 💰 Análisis Económico")
+            col_econ1, col_econ2 = st.columns(2)
+            
+            with col_econ1:
+                st.metric(
+                    "Costo Estimado",
+                    f"${calc.get('costo_estimado', 0):,.2f}",
+                    "Componente + instalación"
+                )
+            
+            with col_econ2:
+                st.metric(
+                    "Período de Recuperación",
+                    f"{calc.get('periodo_recuperacion', 0):.1f} años",
+                    "ROI"
+                )
+        
+        # Gráfico de resultados
+        st.markdown("#### 📈 Visualización")
+        if method == 'serie':
+            fig_series = ChartGenerator.create_series_impedance_chart(calc)
+            st.plotly_chart(fig_series, use_container_width=True, key="parallel_results_series_chart")
+        else:
+            fig = ChartGenerator.create_comparison_chart(calc, method)
+            st.plotly_chart(fig, use_container_width=True, key="parallel_results_parallel_chart")
+    else:
+        st.info("Ingrese los parámetros y presione 'Calcular Compensación' para ver los resultados")
 
 elif seccion == "🔗 Compensación Serie":
     st.header("🔗 Compensación Serie")
     
-    # Cargar plantilla si está seleccionada
-    if st.session_state.selected_template and 'corriente' in st.session_state.selected_template['params']:
+    # Mostrar plantilla seleccionada si existe (para compensación serie)
+    if st.session_state.selected_template and 'reactancia_carga' in st.session_state.selected_template['params']:
         template = st.session_state.selected_template
         st.markdown("---")
         st.markdown(f"""
-        <div style="background: #e8f5e8; border-left: 5px solid #28a745; padding: 20px; margin: 20px 0; border-radius: 5px;">
-            <h3>📋 Plantilla Seleccionada Activa</h3>
-            <p><strong>{template['icon']} {template['name']}</strong></p>
-            <p>{template['description']}</p>
-            <div style="margin-top: 15px;">
-                <small>
+        <div style="background: #d4edda; border-left: 5px solid #155724; padding: 20px; margin: 20px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <h3 style="color: #155724; margin-bottom: 15px; font-size: 1.2em;">📋 Plantilla Seleccionada Activa</h3>
+            <p style="color: #155724; font-weight: bold; margin: 8px 0; font-size: 1.1em;">{template['icon']} {template['name']}</p>
+            <p style="color: #155724; margin: 8px 0; line-height: 1.4;">{template['description']}</p>
+            <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #c3e6cb;">
+                <small style="color: #155724;">
                     <strong>Categoría:</strong> {template['category_name']} | 
                     <strong>Tipo:</strong> {template['params'].get('tipo_comp', 'N/A')}
                 </small>
@@ -517,294 +719,510 @@ elif seccion == "🔗 Compensación Serie":
             st.session_state.selected_template = None
             st.warning("📋 Plantilla eliminada. Usando valores por defecto.")
             st.rerun()
-        
-        st.markdown("---")
-        
-        # Cargar valores de la plantilla
-        default_values = template['params']
-    else:
-        default_values = {
-            "corriente": 50.0,
-            "reactancia_carga": 10.0,
-            "tension": 220,
-            "frecuencia": 60,
-            "tipo_comp": "Capacitiva",
-            "reduccion_porcentaje": 50
-        }
     
-    col1, col2 = st.columns([2, 1])
+    # Parámetros de entrada
+    col_params1, col_params2 = st.columns(2)
     
-    with col1:
-        st.subheader("📝 Parámetros de Entrada")
-        
-        # Datos del circuito
-        st.write("**Datos del Circuito:**")
+    with col_params1:
         corriente = st.number_input(
-            "Corriente de Carga [A]:",
-            min_value=0.1,
+            "📊 Corriente (A):",
+            min_value=1.0,
             max_value=1000.0,
-            value=default_values.get("corriente", 50.0),
-            step=0.1,
-            help="Corriente que circula por la carga en amperios"
+            value=50.0,
+            step=1.0,
+            help="Corriente de línea del sistema"
         )
         
         reactancia_carga = st.number_input(
-            "Reactancia de Carga [Ω]:",
-            min_value=-1000.0,
-            max_value=1000.0,
-            value=default_values.get("reactancia_carga", 10.0),
+            "⚡ Reactancia de Carga (Ω):",
+            min_value=0.001,
+            max_value=100.0,
+            value=10.0,
             step=0.1,
-            help="Reactancia de la carga. Positivo para inductiva, negativo para capacitiva"
+            help="Reactancia de la carga a compensar"
         )
         
-        # Parámetros del sistema
-        st.write("**Parámetros del Sistema:**")
         tension = st.number_input(
-            "Tensión Nominal [V]:",
-            min_value=120,
-            max_value=345000,
-            value=default_values.get("tension", 220),
-            step=10,
-            help="Tensión de operación del sistema en voltios"
-        )
-        
-        frecuencia = st.selectbox(
-            "Frecuencia [Hz]:",
-            [50, 60],
-            index=1 if default_values.get("frecuencia", 60) == 60 else 0
-        )
-        
-        # Tipo de compensación
-        st.write("**Tipo de Compensación Serie:**")
-        tipo_compensacion = st.radio(
-            "Seleccione el tipo:",
-            ["Capacitiva", "Inductiva"],
-            index=0 if default_values.get("tipo_comp", "Capacitiva") == "Capacitiva" else 1
-        )
-        
-        # Explicación del tipo de compensación
-        if tipo_compensacion == "Capacitiva":
-            st.success("""📋 **Compensación Capacitiva Serie**
-            
-            **Uso recomendado para:**
-            - Circuitos inductivos con reactancia alta
-            - Mejora de regulación de tensión
-            - Reducción de caídas de tensión en líneas
-            
-            **Cómo funciona:**
-            El capacitor en serie reduce la reactancia total del circuito (X_total = X_carga - X_c),
-            permitiendo mayor flujo de corriente para la misma tensión.
-            """)
-        else:
-            st.warning("""📋 **Compensación Inductiva Serie**
-            
-            **Uso recomendado para:**
-            - Circuitos capacitivos (cables largos)
-            - Limitación de corriente de cortocircuito
-            - Control de flujo de potencia
-            
-            **Cómo funciona:**
-            El inductor en serie aumenta la reactancia total del circuito (X_total = X_carga + X_c),
-            limitando la corriente y controlando la transferencia de potencia.
-            """)
-        
-        # Objetivo de compensación
-        st.write("**Objetivo de Compensación:**")
-        objetivo_serie = st.slider(
-            "Reducción de Reactancia [%]:",
-            min_value=10,
-            max_value=90,
-            value=default_values.get("reduccion_porcentaje", 50),
-            step=5,
-            help="Porcentaje de reducción deseado de la reactancia total"
+            "🔌 Tensión (V):",
+            min_value=100.0,
+            max_value=50000.0,
+            value=220.0,
+            step=100.0,
+            help="Tensión del sistema (valor de línea)"
         )
     
-    with col2:
-        st.subheader("📊 Resultados del Cálculo")
+    with col_params2:
+        frecuencia = st.number_input(
+            "🔄 Frecuencia (Hz):",
+            min_value=50.0,
+            max_value=400.0,
+            value=60.0,
+            step=1.0,
+            help="Frecuencia del sistema"
+        )
         
-        # Realizar cálculos
-        if st.button("🔢 Calcular Compensación Serie", type="primary"):
-            resultados = PowerCalculator.calculate_series_compensation(
-                corriente, reactancia_carga, tension, frecuencia, tipo_compensacion, objetivo_serie
+        tipo_compensacion = st.selectbox(
+            "🔧 Tipo de Compensación:",
+            ["Capacitiva", "Inductiva"],
+            index=0,
+            help="Tipo de componente a utilizar"
+        )
+        
+        objetivo_serie = st.number_input(
+            "🎯 Objetivo de Reducción (%):",
+            min_value=5.0,
+            max_value=50.0,
+            value=20.0,
+            step=5.0,
+            help="Porcentaje de reducción de reactancia deseado"
+        )
+    
+    # Realizar cálculos
+    if st.button("🔢 Calcular Compensación Serie", type="primary"):
+        resultados = PowerCalculator.calculate_series_compensation(
+            corriente, reactancia_carga, tension, frecuencia, tipo_compensacion, objetivo_serie
+        )
+        
+        if resultados:
+            # Agregar método para identificación
+            resultados['method'] = 'serie'
+            
+            # Mostrar alerta de éxito
+            st.success("✅ ¡Cálculo realizado con éxito!")
+            st.balloons()
+            
+            # Pedir nombre para guardar el cálculo
+            st.markdown("---")
+            st.markdown("### 💾 Guardar Cálculo")
+            st.info("📝 Asigna un nombre descriptivo para identificar este cálculo:")
+            
+            solution_name = st.text_input(
+                "Nombre del cálculo:",
+                value=f"Serie {tipo_compensacion} {corriente:.0f}A {reactancia_carga:.2f}Ω {objetivo_serie}% {tension}V {frecuencia}Hz",
+                help="Este nombre se usará para identificar el cálculo en el comparador",
+                key="series_solution_name"
             )
             
-            if resultados:
-                # Agregar método para identificación
-                resultados['method'] = 'serie'
-                
-                # Guardar en session state
-                st.session_state.current_calculation = resultados
-                
+            # Guardado automático al cambiar el nombre
+            if solution_name.strip():
                 # Calcular costo estimado
-                costo_estimado = ComponentDatabase.estimate_component_cost(resultados['q_compensacion'], tension)
-                resultados['costo_estimado'] = costo_estimado
+                costo_estimado = ComponentDatabase.estimate_component_cost(resultados["q_compensacion"], tension)
+                resultados["costo_estimado"] = costo_estimado
                 
-                # Análisis económico
+                # Análisis económico mejorado
                 analisis_economico = PowerCalculator.calculate_economic_analysis(
                     0, 0,  # Sin pérdidas directas en compensación serie
                     costo_estimado,
                     horas_operacion_anual=8760,
-                    costo_kwh=0.15
+                    costo_kwh=None,  # Usará valor por defecto industrial
+                    multa_fp_bajo=None,  # Usará valor por defecto industrial
+                    corriente_actual=resultados['i_actual'],
+                    corriente_compensada=resultados['i_compensada'],
+                    resistencia_conductor=0.1,  # Ω/km valor estándar
+                    longitud_conductor=1.0  # km valor estándar
                 )
                 resultados.update(analisis_economico)
                 
-                st.success("✅ Cálculo realizado con éxito")
+                # Guardar con nombre personalizado
+                resultados["name"] = solution_name.strip()
+                resultados["added_time"] = datetime.now().strftime("%H:%M:%S")
                 
-                # Métricas principales
-                col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
+                # Guardar en session state como cálculo actual y en historial
+                st.session_state.current_calculation = resultados.copy()
+                st.session_state.calculation_history.append(resultados.copy())
                 
-                with col_metrics1:
-                    st.metric(
-                        "Reactancia de Compensación",
-                        f"{resultados['x_compensacion']:.3f} Ω",
-                        delta=f"{objetivo_serie}% reducción"
-                    )
+                st.success(f"🎉 Cálculo '{solution_name}' guardado automáticamente!")
+                st.info("📊 Ya disponible en el comparador y reportes")
+                st.rerun()
+            
+            # Mostrar vista previa de resultados
+            st.markdown("---")
+            st.markdown("### 📊 Vista Previa de Resultados")
+            
+            # Métricas principales
+            col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
+            
+            with col_metrics1:
+                st.metric(
+                    "Reactancia de Compensación",
+                    f"{resultados['x_compensacion']:.3f} Ω",
+                    delta=f"{objetivo_serie}% reducción"
+                )
+            
+            with col_metrics2:
+                st.metric(
+                    f"Valor del {tipo_compensacion.lower()}",
+                    f"{resultados['valor_componente']:.2f} {resultados['unidad']}"
+                )
+            
+            with col_metrics3:
+                cambio_corriente = ((resultados['i_compensada'] - resultados['i_actual']) / resultados['i_actual']) * 100
+                st.metric(
+                    "Cambio de Corriente",
+                    f"{cambio_corriente:+.1f}%",
+                    delta=f"{resultados['i_compensada'] - resultados['i_actual']:.2f} A"
+                )
+            
+            # Gráfico de comparación
+            st.markdown("#### 📈 Gráfico Comparativo")
+            fig = ChartGenerator.create_comparison_chart(resultados, "serie")
+            st.plotly_chart(fig, use_container_width=True, key="series_preview_chart")
+            
+            # Información adicional
+            with st.expander("📋 Ver más detalles"):
+                col_detail1, col_detail2 = st.columns(2)
                 
-                with col_metrics2:
-                    st.metric(
-                        f"Valor del {tipo_compensacion.lower()}",
-                        f"{resultados['valor_componente']:.2f} {resultados['unidad']}"
-                    )
+                with col_detail1:
+                    st.write("**Datos Actuales:**")
+                    st.write(f"• Corriente: {corriente:.2f} A")
+                    st.write(f"• Reactancia: {reactancia_carga:.3f} Ω")
+                    st.write(f"• Tensión: {tension:.0f} V")
                 
-                with col_metrics3:
-                    cambio_corriente = ((resultados['i_compensada'] - resultados['i_actual']) / resultados['i_actual']) * 100
-                    st.metric(
-                        "Cambio de Corriente",
-                        f"{cambio_corriente:+.1f}%",
-                        delta=f"{resultados['i_compensada'] - resultados['i_actual']:.2f} A"
-                    )
-                
-                # Gráfico de comparación
-                fig = ChartGenerator.create_comparison_chart(resultados, "serie")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Información técnica detallada
-                st.markdown("### ⚡ Análisis Técnico")
-                
-                col_tech1, col_tech2 = st.columns(2)
-                
-                with col_tech1:
-                    st.metric(
-                        "Reactancia Original",
-                        f"{abs(reactancia_carga):.3f} Ω",
-                        "Valor inicial"
-                    )
-                
-                with col_tech2:
-                    st.metric(
-                        "Reactancia Final",
-                        f"{abs(resultados['x_total']):.3f} Ω",
-                        "Después de compensación"
-                    )
-                
-                # Información económica
-                st.markdown("### 💰 Información Económica")
-                
-                col_econ1, col_econ2 = st.columns(2)
-                
-                with col_econ1:
-                    st.metric(
-                        "Costo Estimado",
-                        f"${costo_estimado:,.2f}",
-                        "Componente + instalación"
-                    )
-                
-                with col_econ2:
-                    st.metric(
-                        "Potencia Aparente",
-                        f"{resultados['potencia_aparente']:.2f} kVA",
-                        "Sistema trifásico"
-                    )
+                with col_detail2:
+                    st.write("**Datos Compensados:**")
+                    st.write(f"• Reactancia Final: {resultados['x_total']:.3f} Ω")
+                    st.write(f"• Corriente Final: {resultados['i_compensada']:.2f} A")
+                    st.write(f"• Cambio: {cambio_corriente:+.1f}%")
         else:
             st.info("Ingrese los parámetros y presione 'Calcular Compensación Serie' para ver los resultados")
+    
+    # Mostrar resultados si hay cálculo guardado
+    if st.session_state.current_calculation:
+        calc = st.session_state.current_calculation
+        method = calc.get('method', 'paralelo')
+        
+        st.markdown("### 📊 Resultados Guardados")
+        st.info(f"📋 Cálculo actual: **{calc.get('name', 'Sin nombre')}**")
+        
+        # Mostrar resultados completos según el método
+        if method == 'serie':
+            col_results1, col_results2, col_results3 = st.columns(3)
+            
+            with col_results1:
+                st.metric(
+                    "Reactancia de Compensación",
+                    f"{calc.get('x_compensacion', 0):.3f} Ω",
+                    "Valor requerido"
+                )
+            
+            with col_results2:
+                st.metric(
+                    "Componente",
+                    f"{calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}",
+                    "Tipo de componente"
+                )
+            
+            with col_results3:
+                cambio_corriente = ((calc.get('i_compensada', 0) - calc.get('i_actual', 0)) / calc.get('i_actual', 1)) * 100
+                st.metric(
+                    "Cambio de Corriente",
+                    f"{cambio_corriente:+.1f}%",
+                    "Variación obtenida"
+                )
+            
+            # Información técnica detallada
+            st.markdown("#### ⚡ Análisis Técnico")
+            col_tech1, col_tech2 = st.columns(2)
+            
+            with col_tech1:
+                st.metric(
+                    "Reactancia Original",
+                    f"{abs(calc.get('reactancia_carga', 0)):.3f} Ω",
+                    "Valor inicial"
+                )
+            
+            with col_tech2:
+                st.metric(
+                    "Reactancia Final",
+                    f"{abs(calc.get('x_total', 0)):.3f} Ω",
+                    "Después de compensación"
+                )
+            
+            # Información económica
+            st.markdown("#### 💰 Información Económica")
+            col_econ1, col_econ2 = st.columns(2)
+            
+            with col_econ1:
+                st.metric(
+                    "Costo Estimado",
+                    f"${calc.get('costo_estimado', 0):,.2f}",
+                    "Componente + instalación"
+                )
+            
+            with col_econ2:
+                st.metric(
+                    "Potencia Aparente",
+                    f"{calc.get('potencia_aparente', 0):.2f} kVA",
+                    "Sistema trifásico"
+                )
+        else:
+            # Resultados para compensación paralelo
+            col_results1, col_results2, col_results3 = st.columns(3)
+            
+            with col_results1:
+                st.metric(
+                    "Potencia Reactiva",
+                    f"{calc.get('q_compensacion', 0):.2f} kVAR",
+                    "Compensación necesaria"
+                )
+            
+            with col_results2:
+                st.metric(
+                    "Componente",
+                    f"{calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}",
+                    "Valor requerido"
+                )
+            
+            with col_results3:
+                if calc.get('method') == 'paralelo':
+                    reduccion = ((calc.get('i_actual', 0) - calc.get('i_compensada', 0)) / calc.get('i_actual', 1)) * 100
+                    st.metric(
+                        "Reducción de Corriente",
+                        f"{reduccion:.1f}%",
+                        "Mejora obtenida"
+                    )
+                else:
+                    st.metric(
+                        "Reducción Reactancia",
+                        f"{calc.get('reduccion_porcentaje', 0):.0f}%",
+                        "Objetivo alcanzado"
+                    )
+            
+            # Información económica
+            st.markdown("#### 💰 Análisis Económico")
+            col_econ1, col_econ2 = st.columns(2)
+            
+            with col_econ1:
+                st.metric(
+                    "Costo Estimado",
+                    f"${calc.get('costo_estimado', 0):,.2f}",
+                    "Componente + instalación"
+                )
+            
+            with col_econ2:
+                st.metric(
+                    "Período de Recuperación",
+                    f"{calc.get('periodo_recuperacion', 0):.1f} años",
+                    "ROI"
+                )
+        
+        # Gráfico de resultados
+        st.markdown("#### 📈 Visualización")
+        if method == 'serie':
+            fig_series = ChartGenerator.create_series_impedance_chart(calc)
+            st.plotly_chart(fig_series, use_container_width=True, key="parallel_results_series_chart")
+        else:
+            fig = ChartGenerator.create_comparison_chart(calc, method)
+            st.plotly_chart(fig, use_container_width=True, key="parallel_results_parallel_chart")
+    else:
+        st.info("Ingrese los parámetros y presione 'Calcular Compensación' para ver los resultados")
 
 elif seccion == "📊 Comparador":
     st.header("📊 Comparador de Soluciones")
     
-    st.info("Para usar el comparador, realice primero varios cálculos y luego compárelos aquí")
+    # Mostrar historial de cálculos disponibles
+    st.markdown("### 📋 Historial de Cálculos Disponibles")
     
-    if st.session_state.current_calculation:
-        st.success("✅ Tienes un cálculo listo para comparar")
+    if st.session_state.calculation_history:
+        st.info(f"📊 Tienes {len(st.session_state.calculation_history)} cálculos guardados")
         
-        # Botón para agregar a comparación
-        if st.button("➕ Agregar a Comparación"):
-            if 'comparison_list' not in st.session_state:
-                st.session_state.comparison_list = []
-            
-            # Agregar nombre si no existe
-            if 'name' not in st.session_state.current_calculation:
-                st.session_state.current_calculation['name'] = f"Solución {len(st.session_state.comparison_list) + 1}"
-            
-            st.session_state.comparison_list.append(st.session_state.current_calculation.copy())
-            st.success(f"✅ Agregado a comparación. Total: {len(st.session_state.comparison_list)} soluciones")
-    
-    # Mostrar comparación si hay soluciones
-    if 'comparison_list' in st.session_state and st.session_state.comparison_list:
-        st.markdown("### 📈 Análisis Comparativo")
-        
-        comparison = SolutionComparator.compare_solutions(st.session_state.comparison_list)
-        st.session_state.comparison_results = comparison
-        
-        # Mostrar tabla comparativa
-        import pandas as pd
-        
-        df_data = []
-        for sol in comparison['detailed_comparison']:
-            df_data.append({
-                'Solución': sol['name'],
-                'Tipo': sol['type'],
-                'Método': sol['method'],
-                'Q Compensación (kVAR)': f"{sol['q_compensacion']:.2f}",
-                'Costo Estimado ($)': f"${sol['costo_estimado']:,.2f}",
-                'ROI Anual (%)': f"{sol.get('roi_anual', 0):.1f}",
-                'Score Económico': f"{sol['economic_score']:.0f}",
-                'Score Técnico': f"{sol['technical_score']:.1f}"
-            })
-        
-        df = pd.DataFrame(df_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # Mejores soluciones
-        col_best1, col_best2 = st.columns(2)
-        
-        with col_best1:
-            if comparison['best_economic']:
-                best = comparison['best_economic']
-                st.markdown(f"""
-                <div style="background: #e8f5e8; padding: 20px; border-radius: 10px; border: 2px solid #28a745;">
-                    <h3>🏆 Mejor Solución Económica</h3>
-                    <h4>{best['name']}</h4>
-                    <p><strong>Tipo:</strong> {best['type']}</p>
-                    <p><strong>Costo:</strong> ${best['costo_estimado']:,.2f}</p>
-                    <p><strong>ROI:</strong> {best.get('roi_anual', 0):.1f}% anual</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        with col_best2:
-            if comparison['best_technical']:
-                best = comparison['best_technical']
-                st.markdown(f"""
-                <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; border: 2px solid #2196f3;">
-                    <h3>⚡ Mejor Solución Técnica</h3>
-                    <h4>{best['name']}</h4>
-                    <p><strong>Tipo:</strong> {best['type']}</p>
-                    <p><strong>Score Técnico:</strong> {best['technical_score']:.1f}</p>
-                    <p><strong>Q Compensación:</strong> {best['q_compensacion']:.2f} kVAR</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Gráfico comparativo
-        fig = ChartGenerator.create_solution_comparison_chart(comparison)
-        st.plotly_chart(fig, use_container_width=True)
-    
+        # Mostrar todos los cálculos del historial
+        for i, calc in enumerate(st.session_state.calculation_history):
+            with st.container():
+                col_info, col_actions = st.columns([3, 1])
+                
+                with col_info:
+                    st.markdown(f"""
+                    <div style="border: 1px solid #ddd; padding: 15px; margin: 5px 0; border-radius: 5px; background: {'#e8f5e8' if i == len(st.session_state.calculation_history)-1 else 'white'};">
+                        <h4 style="color: #333; margin-bottom: 10px;">📊 {calc['name']}</h4>
+                        <p style="color: #555; margin: 5px 0;"><strong>Tipo:</strong> {calc.get('method', 'paralelo').capitalize()}</p>
+                        <p style="color: #555; margin: 5px 0;"><strong>Componente:</strong> {calc.get('valor_componente', 0):.2f} {calc.get('unidad', '')}</p>
+                        <p style="color: #555; margin: 5px 0;"><strong>Costo:</strong> ${calc.get('costo_estimado', 0):,.2f}</p>
+                        <p style="color: #555; margin: 5px 0;"><strong>Fecha:</strong> {calc.get('added_time', '')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col_actions:
+                    st.markdown("<br>", unsafe_allow_html=True)  # Espaciado
+                    col_add, col_del = st.columns(2)
+                    
+                    with col_add:
+                        if st.button("➕ Agregar", key=f"add_{i}", help="Agregar a comparación"):
+                            # Verificar si ya está en comparación
+                            existing_names = [s['name'] for s in st.session_state.comparison_list]
+                            if calc['name'] in existing_names:
+                                st.warning(f"⚠️ '{calc['name']}' ya está en la comparación")
+                            else:
+                                st.session_state.comparison_list.append(calc.copy())
+                                st.success(f"✅ '{calc['name']}' agregada a la comparación")
+                                st.rerun()
+                    
+                    with col_del:
+                        if st.button("🗑️", key=f"del_hist_{i}", help="Eliminar del historial"):
+                            # Eliminar del historial
+                            removed_name = st.session_state.calculation_history[i]['name']
+                            st.session_state.calculation_history.pop(i)
+                            st.success(f"✅ '{removed_name}' eliminada del historial")
+                            st.rerun()
     else:
-        st.warning("⚠️ No hay soluciones para comparar. Realiza cálculos primero.")
+        st.warning("⚠️ No hay cálculos en el historial. Realiza cálculos primero.")
+        st.info("💡 Ve a 'Compensación Paralelo' para realizar y guardar cálculos.")
+    
+    # Sección de comparación
+    if st.session_state.comparison_list:
+        st.markdown("---")
+        st.markdown("### 📈 Soluciones en Comparación")
+        
+        # Mostrar soluciones actuales
+        for i, solution in enumerate(st.session_state.comparison_list):
+            with st.container():
+                col_comp_info, col_comp_actions = st.columns([3, 1])
+                
+                with col_comp_info:
+                    st.markdown(f"""
+                    <div style="border: 2px solid #667eea; padding: 15px; margin: 5px 0; border-radius: 5px; background: #f8f9ff;">
+                        <h4 style="color: #333; margin-bottom: 10px;">🔹 {solution['name']}</h4>
+                        <p style="color: #555; margin: 5px 0;"><strong>Tipo:</strong> {solution.get('method', 'paralelo').capitalize()}</p>
+                        <p style="color: #555; margin: 5px 0;"><strong>Componente:</strong> {solution.get('valor_componente', 0):.2f} {solution.get('unidad', '')}</p>
+                        <p style="color: #555; margin: 5px 0;"><strong>Costo:</strong> ${solution.get('costo_estimado', 0):,.2f}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col_comp_actions:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button(f"🗑️", key=f"del_{i}", help="Eliminar de comparación"):
+                        removed_name = st.session_state.comparison_list[i]['name']
+                        st.session_state.comparison_list.pop(i)
+                        st.success(f"✅ '{removed_name}' eliminada de la comparación")
+                        st.rerun()
+        
+        # Botones de acción
+        st.markdown("---")
+        col_action1, col_action2, col_action3 = st.columns(3)
+        
+        with col_action1:
+            if st.button("🔄 Realizar Comparación", type="primary"):
+                if len(st.session_state.comparison_list) >= 2:
+                    comparison = SolutionComparator.compare_solutions(st.session_state.comparison_list)
+                    st.session_state.comparison_results = comparison
+                    st.success("✅ Comparación realizada exitosamente")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Necesitas al menos 2 soluciones para comparar")
+        
+        with col_action2:
+            if st.button("🗑️ Limpiar Comparación", help="Eliminar todas las soluciones de la comparación"):
+                st.session_state.comparison_list = []
+                st.session_state.comparison_results = None
+                st.warning("🗑️ Comparación limpiada")
+                st.rerun()
+        
+        with col_action3:
+            if st.button("📊 Exportar Comparación", help="Exportar a Excel"):
+                if st.session_state.comparison_results:
+                    # Crear DataFrame con resultados de comparación
+                    comparison_data = st.session_state.comparison_results['detailed_comparison']
+                    df_export = pd.DataFrame(comparison_data)
+                    
+                    # Exportar a Excel
+                    from io import BytesIO
+                    import xlsxwriter
+                    
+                    output = BytesIO()
+                    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+                    df_export.to_excel(writer, index=False, sheet_name='Comparación')
+                    writer.close()
+                    
+                    excel_data = output.getvalue()
+                    output.close()
+                    
+                    # Crear enlace de descarga
+                    b64 = base64.b64encode(excel_data).decode()
+                    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="comparacion_soluciones.xlsx" style="display: inline-block; padding: 12px 24px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">📊 Descargar Comparación Excel</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+        
+        # Mostrar resultados de comparación
+        if st.session_state.comparison_results:
+            comparison = st.session_state.comparison_results
+            
+            st.markdown("#### 📊 Resultados de la Comparación")
+            
+            # Tabla comparativa
+            df_data = []
+            for sol in comparison['detailed_comparison']:
+                df_data.append({
+                    'Solución': sol['name'],
+                    'Tipo': sol['type'],
+                    'Método': sol['method'],
+                    'Q Compensación (kVAR)': f"{sol['q_compensacion']:.2f}",
+                    'Componente': f"{sol['valor_componente']:.2f} {sol['unidad']}",
+                    'Costo Estimado ($)': f"${sol['costo_estimado']:,.0f}",
+                    'ROI Anual (%)': f"{sol.get('roi_anual', 0):.1f}",
+                    'Score Económico': f"{sol['economic_score']:.0f}",
+                    'Score Técnico': f"{sol['technical_score']:.1f}",
+                    'Score Total': f"{sol.get('total_score', 0):.1f}"
+                })
+            
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True)
+            
+            # Mejores soluciones
+            col_best1, col_best2, col_best3 = st.columns(3)
+            
+            with col_best1:
+                if comparison.get('best_economic'):
+                    best = comparison['best_economic']
+                    st.markdown(f"""
+                    <div style="background: #e8f5e8; padding: 20px; border-radius: 10px; border: 2px solid #28a745; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <h3 style="color: #155724; margin-bottom: 15px;">🏆 Mejor Solución Económica</h3>
+                        <h4 style="color: #155724; margin-bottom: 10px;">{best['name']}</h4>
+                        <p style="color: #333; margin: 5px 0;"><strong>Tipo:</strong> {best['type']}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>Costo:</strong> ${best['costo_estimado']:,.0f}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>ROI:</strong> {best.get('roi_anual', 0):.1f}% anual</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            with col_best2:
+                if comparison.get('best_technical'):
+                    best = comparison['best_technical']
+                    st.markdown(f"""
+                    <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; border: 2px solid #2196f3; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <h3 style="color: #0d47a1; margin-bottom: 15px;">⚡ Mejor Solución Técnica</h3>
+                        <h4 style="color: #0d47a1; margin-bottom: 10px;">{best['name']}</h4>
+                        <p style="color: #333; margin: 5px 0;"><strong>Tipo:</strong> {best['type']}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>Score Técnico:</strong> {best['technical_score']:.1f}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>Q Compensación:</strong> {best['q_compensacion']:.2f} kVAR</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            with col_best3:
+                if comparison.get('best_overall'):
+                    best = comparison['best_overall']
+                    st.markdown(f"""
+                    <div style="background: #fff3e0; padding: 20px; border-radius: 10px; border: 2px solid #ff9800; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <h3 style="color: #e65100; margin-bottom: 15px;">🌟 Mejor Solución Global</h3>
+                        <h4 style="color: #e65100; margin-bottom: 10px;">{best['name']}</h4>
+                        <p style="color: #333; margin: 5px 0;"><strong>Tipo:</strong> {best['type']}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>Score Total:</strong> {best.get('total_score', 0):.1f}</p>
+                        <p style="color: #333; margin: 5px 0;"><strong>Balance:</strong> Económico + Técnico</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Gráfico comparativo
+            st.markdown("#### 📈 Visualización Comparativa")
+            fig = ChartGenerator.create_solution_comparison_chart(comparison)
+            st.plotly_chart(fig, use_container_width=True, key="comparator_chart")
+    else:
+        st.info("ℹ️ No hay soluciones en comparación. Agrega cálculos desde el historial arriba.")
 
 elif seccion == "📄 Reportes":
     st.header("📄 Generación de Reportes")
     
     if st.session_state.current_calculation:
         st.success("✅ Tienes datos para generar reporte")
+        
+        calc = st.session_state.current_calculation
+        st.info(f"📋 Cálculo disponible: **{calc.get('name', 'Sin nombre')}** ({calc.get('method', 'paralelo')})")
         
         # Información de la empresa
         st.markdown("### 🏢 Información de la Empresa")
@@ -852,6 +1270,7 @@ elif seccion == "📄 Reportes":
     
     else:
         st.warning("⚠️ No hay cálculos realizados. Realiza un cálculo primero para generar reportes.")
+        st.info("💡 Ve a 'Compensación Paralelo' para realizar un cálculo.")
 
 # Footer
 st.markdown("---")
@@ -859,61 +1278,3 @@ st.markdown("""
 **⚡ Calculadora de Compensación de Reactivos v2.0**  
 *Arquitectura modular con plantillas, comparador de soluciones y reportes profesionales*
 """)
-
-# Sidebar con referencias rápidas (mejorado)
-st.sidebar.markdown("---")
-st.sidebar.subheader("📚 Referencias Rápidas")
-
-if seccion == "⚡ Compensación Paralelo":
-    st.sidebar.markdown("""
-    **Fórmulas - Compensación Paralelo:**
-    
-    **Potencia Reactiva:**
-    • Q = P × tan(φ)
-    
-    **Factor de Potencia:**
-    • FP = cos(φ)
-    
-    **Reactivos de Compensación:**
-    • Q_c = P × (tan(φ₁) - tan(φ₂))
-    
-    **Capacitancia:**
-    • C = Q_c / (2π × f × V²)
-    
-    **Inductancia:**
-    • L = V² / (2π × f × Q_c)
-    """)
-elif seccion == "🔗 Compensación Serie":
-    st.sidebar.markdown("""
-    **Fórmulas - Compensación Serie:**
-    
-    **Reactancia de Compensación:**
-    • X_c = Q_c / I²
-    
-    **Capacitancia Serie:**
-    • C = 1 / (2π × f × X_c)
-    
-    **Inductancia Serie:**
-    • L = X_c / (2π × f)
-    
-    **Reactancia Total:**
-    • X_total = X_carga ± X_c
-    """)
-else:
-    st.sidebar.markdown("""
-    **Fórmulas Generales:**
-    
-    **Triángulo de Potencias:**
-    • S² = P² + Q²
-    • S = P/cos(φ)
-    • Q = P × tan(φ)
-    
-    **Factor de Potencia:**
-    • FP = P/S = cos(φ)
-    
-    **Compensación Paralelo:**
-    • Q_c = P × (tan(φ₁) - tan(φ₂))
-    
-    **Compensación Serie:**
-    • X_c = Q_c / I²
-    """)

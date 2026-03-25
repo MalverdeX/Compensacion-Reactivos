@@ -2,8 +2,7 @@
 Módulo de cálculos matemáticos para compensación de reactivos
 """
 import math
-import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 class PowerCalculator:
     """Clase principal para cálculos de potencia y compensación"""
@@ -15,7 +14,9 @@ class PowerCalculator:
         fp_deseado: float,
         tension: float,
         frecuencia: float,
-        tipo_comp: str
+        tipo_comp: str,
+        resistencia_conductor: float = 0.1,
+        longitud_conductor: float = 1.0
     ) -> Dict:
         """
         Calcula la compensación paralelo
@@ -27,6 +28,8 @@ class PowerCalculator:
             tension: Tensión nominal en V
             frecuencia: Frecuencia en Hz
             tipo_comp: "Capacitiva" o "Inductiva"
+            resistencia_conductor: Resistencia del conductor en Ω/km (default: 0.1)
+            longitud_conductor: Longitud del conductor en km (default: 1.0)
             
         Returns:
             Diccionario con todos los resultados del cálculo
@@ -43,9 +46,9 @@ class PowerCalculator:
         q2 = P_w * math.tan(phi2)  # Reactivos deseados
         q_compensacion = abs(q1 - q2)  # Reactivos de compensación
         
-        # Corrientes
-        i_actual = P_w / (tension * fp_actual)
-        i_compensada = P_w / (tension * fp_deseado)
+        # Corrientes (sistema trifásico)
+        i_actual = P_w / (math.sqrt(3) * tension * fp_actual)
+        i_compensada = P_w / (math.sqrt(3) * tension * fp_deseado)
         
         # Valores del compensador
         if tipo_comp == "Capacitiva":
@@ -59,10 +62,25 @@ class PowerCalculator:
             unidad = "mH"
             reactancia = 2 * math.pi * frecuencia * inductancia
         
-        # Pérdidas (asumiendo resistencia constante)
-        r_conductor = 0.1  # Resistencia estimada en ohmios
-        perdidas_actuales = 3 * i_actual**2 * r_conductor / 1000  # kW
-        perdidas_compensadas = 3 * i_compensada**2 * r_conductor / 1000  # kW
+        # Pérdidas (cálculo realista basado en porcentaje de la carga)
+        # Las pérdidas en conductores suelen ser 1-5% de la potencia activa
+        porcentaje_perdidas = 0.03  # 3% de pérdidas (típico industrial)
+        perdidas_actuales = potencia_activa * porcentaje_perdidas  # kW
+        
+        # Para compensación paralelo, las pérdidas se reducen proporcionalmente
+        if i_compensada > 0 and i_actual > 0:
+            factor_reduccion = i_compensada / i_actual
+            perdidas_compensadas = perdidas_actuales * factor_reduccion
+        else:
+            perdidas_compensadas = perdidas_actuales  # Sin compensación
+        
+        # Pérdidas por efecto Joule (opcional, si se proporcionan datos de conductor)
+        perdidas_joule_actuales = 0
+        perdidas_joule_compensadas = 0
+        if resistencia_conductor > 0 and longitud_conductor > 0:
+            # P = √3 × I² × R (sistema trifásico)
+            perdidas_joule_actuales = math.sqrt(3) * (i_actual ** 2) * resistencia_conductor * longitud_conductor / 1000  # kW
+            perdidas_joule_compensadas = math.sqrt(3) * (i_compensada ** 2) * resistencia_conductor * longitud_conductor / 1000  # kW
         
         return {
             'q_actual': q1 / 1000,  # kVAR
@@ -137,12 +155,20 @@ class PowerCalculator:
             unidad = "mH"
         
         # Potencias
-        potencia_aparente_actual = math.sqrt(3) * tension * corriente
+        potencia_aparente_actual = math.sqrt(3) * tension * corriente / 1000  # kVA
         impedancia_actual = abs(reactancia_carga)
         impedancia_compensada = abs(x_total)
         
-        # Corriente compensada (aproximada)
-        i_compensada = corriente * (impedancia_actual / impedancia_compensada) if impedancia_compensada > 0 else corriente
+        # Corriente compensada (correcta para sistema trifásico)
+        if impedancia_compensada > 0:
+            i_compensada = math.sqrt(3) * tension / (math.sqrt(3) * impedancia_compensada)  # I = V/(√3×Z)
+        else:
+            i_compensada = corriente  # Sin cambio
+        
+        # Pérdidas realistas (basado en porcentaje de la potencia aparente)
+        porcentaje_perdidas = 0.03  # 3% de pérdidas (típico industrial)
+        perdidas_actuales = potencia_aparente_actual * porcentaje_perdidas  # kW
+        perdidas_compensadas = (math.sqrt(3) * tension * i_compensada / 1000) * porcentaje_perdidas  # kW
         
         return {
             'x_compensacion': x_compensacion,
@@ -167,41 +193,101 @@ class PowerCalculator:
         perdidas_compensadas: float,
         costo_componente: float,
         horas_operacion_anual: float = 8760,
-        costo_kwh: float = 0.15
+        costo_kwh: float = None,
+        multa_fp_bajo: float = None,
+        corriente_actual: float = None,
+        corriente_compensada: float = None,
+        resistencia_conductor: float = 0.1,
+        longitud_conductor: float = 1.0
     ) -> Dict:
         """
-        Calcula análisis económico de la compensación
+        Análisis económico mejorado con valores realistas
         
         Args:
             perdidas_actuales: Pérdidas actuales en kW
             perdidas_compensadas: Pérdidas compensadas en kW
-            costo_componente: Costo del componente en $
+            costo_componente: Costo del componente en USD
             horas_operacion_anual: Horas de operación anual
-            costo_kwh: Costo por kWh en $
+            costo_kwh: Costo por kWh (default: $0.12)
+            multa_fp_bajo: Multa por FP bajo (default: $5.0/kW-mes)
+            corriente_actual: Corriente actual en A
+            corriente_compensada: Corriente compensada en A
+            resistencia_conductor: Resistencia del conductor en Ω/km
+            longitud_conductor: Longitud del conductor en km
             
         Returns:
-            Diccionario con análisis económico
+            Diccionario con análisis económico completo
         """
-        ahorro_anual_kwh = (perdidas_actuales - perdidas_compensadas) * horas_operacion_anual
-        ahorro_anual_usd = ahorro_anual_kwh * costo_kwh
-        periodo_recuperacion = costo_componente / ahorro_anual_usd if ahorro_anual_usd > 0 else float('inf')
-        roi_anual = (ahorro_anual_usd / costo_componente) * 100 if costo_componente > 0 else 0
+        
+        # Valores por defecto realistas
+        if costo_kwh is None:
+            costo_kwh = 0.12  # $0.12 USD/kWh (promedio industrial)
+        if multa_fp_bajo is None:
+            multa_fp_bajo = 5.0  # $5.0 USD/kW-mes (típico para FP < 0.9)
+        
+        # 1. Ahorro por reducción de pérdidas tradicionales
+        # Las pérdidas reales suelen ser 1-5% de la carga total
+        ahorro_tradicional_kwh = (perdidas_actuales - perdidas_compensadas) * horas_operacion_anual
+        ahorro_tradicional_usd = ahorro_tradicional_kwh * costo_kwh
+        
+        # 2. Ahorro por reducción de pérdidas por efecto Joule (I²R)
+        # Usando valores realistas: resistencia 0.1 Ω/km, longitud 1 km
+        ahorro_joule_usd = 0
+        if corriente_actual is not None and corriente_compensada is not None:
+            # Pérdidas por efecto Joule: P = 3 * I² * R (sistema trifásico)
+            # Usando valores realistas de resistencia y longitud
+            perdidas_joule_actuales = 3 * (corriente_actual ** 2) * resistencia_conductor * longitud_conductor / 1000  # kW
+            perdidas_joule_compensadas = 3 * (corriente_compensada ** 2) * resistencia_conductor * longitud_conductor / 1000  # kW
+            
+            ahorro_joule_kw = perdidas_joule_actuales - perdidas_joule_compensadas
+            ahorro_joule_kwh = ahorro_joule_kw * horas_operacion_anual
+            ahorro_joule_usd = ahorro_joule_kwh * costo_kwh
+        
+        # 3. Ahorro por multas de factor de potencia
+        # Cálculo más realista basado en la potencia activa
+        ahorro_multa_usd = 0
+        if perdidas_actuales > 0 and perdidas_compensadas > 0:
+            # Estimar potencia activa basada en pérdidas (asumiendo fp ≈ 0.8)
+            potencia_activa_estimada = perdidas_actuales / 0.05  # Si pérdidas son 5% de P_activa
+            fp_mejora = 0.02  # Mejora típica de FP
+            
+            # Cálculo de multa basado en la potencia activa
+            multa_base = multa_fp_bajo * potencia_activa_estimada
+            ahorro_multa_mensual = multa_base * fp_mejora * 0.3  # Factor conservador
+            ahorro_multa_usd = ahorro_multa_mensual * 12  # Anual
+        
+        # 4. Ahorro total anual
+        ahorro_anual_usd = ahorro_tradicional_usd + ahorro_joule_usd + ahorro_multa_usd
+        ahorro_anual_kwh = ahorro_tradicional_kwh + (ahorro_joule_usd / costo_kwh if costo_kwh > 0 else 0)
+        
+        # 5. Cálculo de ROI y período de recuperación
+        if ahorro_anual_usd > 0 and costo_componente > 0:
+            periodo_recuperacion = costo_componente / ahorro_anual_usd
+            roi_anual = (ahorro_anual_usd / costo_componente) * 100
+        else:
+            periodo_recuperacion = float('inf') if costo_componente > 0 else 0
+            roi_anual = 0
         
         return {
             'ahorro_anual_kwh': ahorro_anual_kwh,
             'ahorro_anual_usd': ahorro_anual_usd,
+            'ahorro_tradicional_usd': ahorro_tradicional_usd,
+            'ahorro_joule_usd': ahorro_joule_usd,
+            'ahorro_multa_usd': ahorro_multa_usd,
             'periodo_recuperacion': periodo_recuperacion,
             'roi_anual': roi_anual,
             'costo_componente': costo_componente,
             'horas_operacion_anual': horas_operacion_anual,
-            'costo_kwh': costo_kwh
+            'costo_kwh': costo_kwh,
+            'multa_fp_bajo': multa_fp_bajo,
+            'perdidas_joule_reducidas_kw': 3 * ((corriente_actual ** 2) - (corriente_compensada ** 2)) * resistencia_conductor * longitud_conductor / 1000 if corriente_actual is not None else 0
         }
 
 class SolutionComparator:
     """Clase para comparar múltiples soluciones de compensación"""
     
     @staticmethod
-    def compare_solutions(solutions: list) -> Dict:
+    def compare_solutions(solutions: List[Dict]) -> Dict:
         """
         Compara múltiples soluciones de compensación
         
@@ -211,72 +297,56 @@ class SolutionComparator:
         Returns:
             Diccionario con análisis comparativo
         """
-        if not solutions:
-            return {}
+        if not solutions or len(solutions) < 2:
+            return {"error": "Se necesitan al menos 2 soluciones para comparar"}
         
-        comparison = {
-            'num_solutions': len(solutions),
-            'best_economic': None,
-            'best_technical': None,
-            'detailed_comparison': []
-        }
+        # Calcular scores para cada solución
+        scored_solutions = []
         
-        best_economic_score = float('inf')
-        best_technical_score = float('-inf')
-        
-        for i, solution in enumerate(solutions):
-            # Calcular scores
-            economic_score = SolutionComparator._calculate_economic_score(solution)
-            technical_score = SolutionComparator._calculate_technical_score(solution)
+        for i, sol in enumerate(solutions):
+            # Score económico (menor costo = mejor score)
+            max_cost = max([s.get('costo_estimado', 0) for s in solutions])
+            min_cost = min([s.get('costo_estimado', 0) for s in solutions])
             
-            solution_data = {
-                'index': i,
-                'name': solution.get('name', f'Solución {i+1}'),
-                'type': solution.get('tipo_comp', 'Desconocido'),
-                'method': solution.get('method', 'Desconocido'),
+            if max_cost > min_cost:
+                economic_score = 100 * (1 - (sol.get('costo_estimado', 0) - min_cost) / (max_cost - min_cost))
+            else:
+                economic_score = 100
+            
+            # Score técnico (basado en eficiencia y parametros)
+            if sol.get('method') == 'paralelo':
+                # Para compensación paralelo: mayor reducción de corriente = mejor
+                reduction = ((sol.get('i_actual', 0) - sol.get('i_compensada', 0)) / sol.get('i_actual', 1)) * 100
+                technical_score = min(100, reduction * 2)  # 50% reducción = 100 puntos
+            else:
+                # Para compensación serie: mayor reducción de reactancia = mejor
+                reduction = sol.get('reduccion_porcentaje', 0)
+                technical_score = min(100, reduction * 1.11)  # 90% reducción = 100 puntos
+            
+            # Score total (promedio ponderado)
+            total_score = (economic_score * 0.6) + (technical_score * 0.4)
+            
+            # Agregar scores a la solución
+            scored_sol = sol.copy()
+            scored_sol.update({
                 'economic_score': economic_score,
                 'technical_score': technical_score,
-                'q_compensacion': solution.get('q_compensacion', 0),
-                'reduccion_perdidas': solution.get('reduccion_perdidas', 0),
-                'costo_estimado': solution.get('costo_estimado', 0),
-                'periodo_recuperacion': solution.get('periodo_recuperacion', float('inf'))
-            }
+                'total_score': total_score,
+                'type': f"{sol.get('tipo_comp', 'Capacitiva')} {sol.get('method', 'paralelo').capitalize()}",
+                'name': sol.get('name', f'Solución {i+1}')
+            })
             
-            comparison['detailed_comparison'].append(solution_data)
-            
-            # Mejor solución económica
-            if economic_score < best_economic_score:
-                best_economic_score = economic_score
-                comparison['best_economic'] = solution_data
-            
-            # Mejor solución técnica
-            if technical_score > best_technical_score:
-                best_technical_score = technical_score
-                comparison['best_technical'] = solution_data
+            scored_solutions.append(scored_sol)
         
-        return comparison
-    
-    @staticmethod
-    def _calculate_economic_score(solution: Dict) -> float:
-        """Calcula score económico (menor es mejor)"""
-        costo = solution.get('costo_estimado', 0)
-        recuperacion = solution.get('periodo_recuperacion', float('inf'))
-        ahorro_anual = solution.get('ahorro_anual_usd', 0)
+        # Encontrar mejores soluciones
+        best_economic = max(scored_solutions, key=lambda x: x['economic_score'])
+        best_technical = max(scored_solutions, key=lambda x: x['technical_score'])
+        best_overall = max(scored_solutions, key=lambda x: x['total_score'])
         
-        if ahorro_anual <= 0:
-            return float('inf')
-        
-        # Score combinado de costo y período de recuperación
-        return costo * 0.6 + recuperacion * 1000 * 0.4
-    
-    @staticmethod
-    def _calculate_technical_score(solution: Dict) -> float:
-        """Calcula score técnico (mayor es mejor)"""
-        reduccion_perdidas = solution.get('reduccion_perdidas', 0)
-        mejora_fp = solution.get('mejora_fp', 0)
-        q_compensacion = solution.get('q_compensacion', 0)
-        
-        # Penalizar compensaciones muy grandes
-        penalty = max(0, q_compensacion - 100) * 0.1
-        
-        return reduccion_perdidas * 0.5 + mejora_fp * 30 - penalty
+        return {
+            'detailed_comparison': scored_solutions,
+            'best_economic': best_economic,
+            'best_technical': best_technical,
+            'best_overall': best_overall,
+            'total_solutions': len(solutions)
+        }
